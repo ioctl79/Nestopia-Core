@@ -125,6 +125,14 @@ namespace Nes
 			};
 
 		private:
+      unsigned int addr_mask;
+      unsigned int addr_fixed;
+      unsigned int addr_flip;
+      unsigned int glitch_seed;
+      // 0 - 1024
+      unsigned int glitch_prob;
+      unsigned long long curtime;
+      unsigned long long glitch_time_mask;
 
 			struct Chr : ChrMem
 			{

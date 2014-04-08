@@ -22,6 +22,10 @@
 //
 ////////////////////////////////////////////////////////////////////////////////////////
 
+#include <sys/time.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <stdlib.h>
 #include <cstring>
 #include "NstCpu.hpp"
 #include "NstPpu.hpp"
@@ -34,6 +38,32 @@ namespace Nes
 		#ifdef NST_MSVC_OPTIMIZE
 		#pragma optimize("s", on)
 		#endif
+
+    unsigned int hash(unsigned int k) {
+      static unsigned int table[256] = { 0 };
+      if (table[0] == 0) { 
+        for (int i = 0; i < 256; i++) {
+          table[i] = rand();
+        }
+      }
+      unsigned int out = table[k & 0xff];
+      out ^= table[(k >> 8) & 0xff];
+      out ^= table[(k >> 16) & 0xff];
+      out ^= table[(k >> 24) & 0xff];
+      return out;
+    }
+
+    void LOG(const char* fmt, ...) {
+      return;
+      static FILE* fp = NULL;
+      if (!fp) {
+        fp = fopen("/tmp/log.txt", "w");
+      }
+      va_list va;
+      va_start(va, fmt);
+      vfprintf(fp, fmt, va);
+      va_end(va);
+    }
 
 		const byte Ppu::yuvMaps[4][0x40] =
 		{
@@ -105,8 +135,28 @@ namespace Nes
 		output (screen.pixels),
 		model  (PPU_RP2C02),
 		rgbMap (NULL),
-		yuvMap (NULL)
+		yuvMap (NULL),
+    addr_mask(0xffff),
+    addr_fixed(0x0000),
+    glitch_seed(0),
+    glitch_prob(1024),
+    glitch_time_mask(0)
 		{
+      if(getenv("NESTOPIA_ADDR_MASK")) {
+        addr_mask = strtol(getenv("NESTOPIA_ADDR_MASK"), NULL, 0);
+      }
+      if (getenv("NESTOPIA_ADDR_FIXED")) {
+        addr_fixed = strtol(getenv("NESTOPIA_ADDR_FIXED"), NULL, 0);
+      }
+      if (getenv("NESTOPIA_ADDR_FLIP")) {
+        addr_flip = strtol(getenv("NESTOPIA_ADDR_FLIP"), NULL, 0);
+      }
+      if (getenv("NESTOPIA_GLITCH_PROB")) {
+        glitch_prob = 1024 * strtod(getenv("NESTOPIA_GLITCH_PROB"), NULL);
+      }
+      if (getenv("NESTOPIA_GLITCH_TIME_MASK")) {
+        glitch_time_mask = strtoll(getenv("NESTOPIA_GLITCH_TIME_MASK"), NULL, 0);
+      }
 			cycles.one = PPU_RP2C02_CC;
 			PowerOff();
 		}
@@ -651,7 +701,17 @@ namespace Nes
 
 		NST_FORCE_INLINE void Ppu::UpdateAddressLine(uint address)
 		{
+      static int cntr = 0;
+      cntr++;
 			NST_ASSERT( address <= 0x3FFF );
+      LOG("Curtime: %f %llx %llx %llx\n", ((double) curtime) / 0x10000, curtime, glitch_time_mask, curtime & glitch_time_mask);
+      unsigned int seed = (address & ~0xf) ^ (curtime & glitch_time_mask);
+      LOG("seed: %llx ^ %llx = %llx -> %x\n", (address & ~0xf), (curtime & glitch_time_mask), seed, hash(seed));
+      if (hash(seed) % 1024 < glitch_prob) {
+        address &= addr_mask;
+        address |= addr_fixed;
+        address ^= addr_flip;
+      }
 			io.address = address;
 
 			if (io.line)
@@ -1455,6 +1515,9 @@ namespace Nes
 					case 240:
 					case 248:
 					HActive:
+            struct timeval t;
+            gettimeofday(&t, NULL);
+            curtime = ((long long) t.tv_usec * 0x10000 / 1000000)  + (t.tv_sec  << 16);
 
 						LoadTiles();
 						EvaluateSpritesEven();
